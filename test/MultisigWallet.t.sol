@@ -18,6 +18,17 @@ contract MultisigWalletTest is Test {
     address public signer3;
     address public nonSigner;
     
+    // Transaction parameters used in multiple tests
+    address mockAddress;
+    uint256 transferAmount;
+    
+    // Events definition for tests
+    event TransactionSigned(bytes32 indexed txHash, address indexed signer);
+    event TransactionExecuted(bytes32 indexed txHash, address indexed target, uint256 value, bytes data);
+    event SignerAdded(address indexed signer);
+    event SignerRemoved(address indexed signer);
+    event ThresholdChanged(uint256 newThreshold);
+    
     function setUp() public {
         // Setup addresses
         owner = address(this);
@@ -33,13 +44,20 @@ contract MultisigWalletTest is Test {
         
         // Deploy mock contract
         mockContract = new Mock();
+        mockAddress = address(mockContract);
         
         // Deploy multisig wallet
         wallet = new MultisigWallet(signers, THRESHOLD);
         
         // Fund the wallet with some ETH for tests
         vm.deal(address(wallet), 10 ether);
+        
+        // Common value for transfers
+        transferAmount = 1 ether;
     }
+
+    // Required to receive ETH in tests
+    receive() external payable {}
     
     // ============ Deployment Tests ============
     
@@ -61,21 +79,13 @@ contract MultisigWalletTest is Test {
     }
     
     function testRevertDeployWithInvalidThresholdZero() public {
-        address[] memory testSigners = new address[](3);
-        testSigners[0] = signer1;
-        testSigners[1] = signer2;
-        testSigners[2] = signer3;
-
+        address[] memory testSigners = _createTestSigners();
         vm.expectRevert(MultisigWallet.InvalidThreshold.selector);
         new MultisigWallet(testSigners, 0); // Should fail with InvalidThreshold
     }
     
     function testDeployWithInvalidThresholdTooHigh() public {
-        address[] memory testSigners = new address[](3);
-        testSigners[0] = signer1;
-        testSigners[1] = signer2;
-        testSigners[2] = signer3;
-        
+        address[] memory testSigners = _createTestSigners();
         vm.expectRevert(abi.encodeWithSelector(MultisigWallet.InvalidThreshold.selector));
         new MultisigWallet(testSigners, 4); // Should fail with InvalidThreshold
     }
@@ -164,186 +174,55 @@ contract MultisigWalletTest is Test {
     
     // ============ Transaction Execution Tests ============
     
-  function testSendEtherToContract() public {
-        // Setup transaction
-        address target = address(mockContract);
-        uint256 value = 1 ether;
+    function testSendEtherToContract() public {
         bytes memory data = ""; // Empty data for a simple ETH transfer
+        _testSuccessfulTransaction(mockAddress, transferAmount, data);
         
-        // Create and sign transaction
-        bytes32 txHash = wallet.getTransactionHash(target, value, data, wallet.nonce());
-        
-        vm.prank(signer1);
-        wallet.signTransaction(txHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(txHash);
-        
-        // Prepare signers array
-        address[] memory executionSigners = new address[](2);
-        executionSigners[0] = signer1;
-        executionSigners[1] = signer2;
-        
-        // Check initial balances
-        uint256 initialWalletBalance = address(wallet).balance;
-        uint256 initialReceiverBalance = address(mockContract).balance;
-        
-        // Execute the transaction
-        wallet.executeTransaction(target, value, data, executionSigners);
-        
-        // Verify balances after transfer
-        assertEq(address(wallet).balance, initialWalletBalance - value, "Wallet balance not decreased correctly");
-        assertEq(address(mockContract).balance, initialReceiverBalance + value, "Receiver balance not increased correctly");
-        assertEq(mockContract.lastValueReceived(), value, "Received value not tracked correctly");
+        // Verify Mock contract received the ETH and recorded data correctly
+        assertEq(mockContract.lastValueReceived(), transferAmount, "Received value not tracked correctly");
         assertEq(mockContract.lastSender(), address(wallet), "Sender not tracked correctly");
     }
 
-      // Test sending ETH to a contract with a specific function
     function testSendEtherToContractWithFunction() public {
-        // Setup transaction to call the deposit function with ETH
-        address target = address(mockContract);
-        uint256 value = 1 ether;
         bytes memory data = abi.encodeWithSignature("deposit()");
+        _testSuccessfulTransaction(mockAddress, transferAmount, data);
         
-        // Create and sign transaction
-        bytes32 txHash = wallet.getTransactionHash(target, value, data, wallet.nonce());
-        
-        vm.prank(signer1);
-        wallet.signTransaction(txHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(txHash);
-        
-        // Prepare signers array
-        address[] memory executionSigners = new address[](2);
-        executionSigners[0] = signer1;
-        executionSigners[1] = signer2;
-        
-        // Check initial balances
-        uint256 initialWalletBalance = address(wallet).balance;
-        uint256 initialReceiverBalance = address(mockContract).balance;
-        
-        // Execute the transaction
-        wallet.executeTransaction(target, value, data, executionSigners);
-        
-        // Verify balances after transfer
-        assertEq(address(wallet).balance, initialWalletBalance - value, "Wallet balance not decreased correctly");
-        assertEq(address(mockContract).balance, initialReceiverBalance + value, "Receiver balance not increased correctly");
-        assertEq(mockContract.lastValueReceived(), value, "Received value not tracked correctly");
+        // Verify Mock contract received the ETH and recorded data correctly
+        assertEq(mockContract.lastValueReceived(), transferAmount, "Received value not tracked correctly");
         assertEq(mockContract.lastSender(), address(wallet), "Sender not tracked correctly");
     }
 
-      // Test sending ETH to a contract that rejects ETH
     function testRevertSendEtherToRejectingContract() public {
         // Configure the test receiver to reject ETH
         mockContract.setShouldAcceptEther(false);
         
-        // Setup transaction
-        address target = address(mockContract);
-        uint256 value = 1 ether;
-        bytes memory data = ""; // Empty data for a simple ETH transfer
-        
-        // Create and sign transaction
-        bytes32 txHash = wallet.getTransactionHash(target, value, data, wallet.nonce());
-        
-        vm.prank(signer1);
-        wallet.signTransaction(txHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(txHash);
-        
-        // Prepare signers array
-        address[] memory executionSigners = new address[](2);
-        executionSigners[0] = signer1;
-        executionSigners[1] = signer2;
+        bytes memory data = ""; 
+        address[] memory executionSigners = _getExecutionSigners();
         
         // Execute the transaction - should revert
         vm.expectRevert();
-        wallet.executeTransaction(target, value, data, executionSigners);
+        wallet.executeTransaction(mockAddress, transferAmount, data, executionSigners);
     }
 
-
-    // Test sending ETH to an EOA (Externally Owned Account)
     function testSendEtherToEOA() public {
-        // Setup transaction to send ETH to an EOA
-        address target = address(0x5); // Some EOA address
-        uint256 value = 1 ether;
-        bytes memory data = ""; // Empty data for a simple ETH transfer
-        
-        // Fund the wallet explicitly
-        vm.deal(address(wallet), 10 ether);
-        
-        // Create and sign transaction
-        bytes32 txHash = wallet.getTransactionHash(target, value, data, wallet.nonce());
-        
-        vm.prank(signer1);
-        wallet.signTransaction(txHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(txHash);
-        
-        // Prepare signers array
-        address[] memory executionSigners = new address[](2);
-        executionSigners[0] = signer1;
-        executionSigners[1] = signer2;
-        
-        // Check initial balances
-        uint256 initialWalletBalance = address(wallet).balance;
-        uint256 initialTargetBalance = address(target).balance;
-        
-        // Execute the transaction
-        wallet.executeTransaction(target, value, data, executionSigners);
-        
-        // Verify balances after transfer
-        assertEq(address(wallet).balance, initialWalletBalance - value, "Wallet balance not decreased correctly");
-        assertEq(address(target).balance, initialTargetBalance + value, "Target balance not increased correctly");
+        address eoa = address(0x5); // Some EOA address
+        bytes memory data = ""; 
+        _testSuccessfulTransaction(eoa, transferAmount, data);
     }
 
-
-    // Test executing a failing function (not ETH transfer related)
     function testRevertExecuteRevertingFunction() public {
-        // Setup transaction to call a function that will revert
-        address target = address(mockContract);
-        uint256 value = 0; // No ETH
         bytes memory data = abi.encodeWithSignature("revertingFunction()");
-        
-        // Create and sign transaction
-        bytes32 txHash = wallet.getTransactionHash(target, value, data, wallet.nonce());
-        
-        vm.prank(signer1);
-        wallet.signTransaction(txHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(txHash);
-        
-        // Prepare signers array
-        address[] memory executionSigners = new address[](2);
-        executionSigners[0] = signer1;
-        executionSigners[1] = signer2;
+        address[] memory executionSigners = _getExecutionSigners();
         
         // Execute the transaction - should revert
         vm.expectRevert();
-        wallet.executeTransaction(target, value, data, executionSigners);
+        wallet.executeTransaction(mockAddress, 0, data, executionSigners);
     }
     
     function testExecuteTransactionEmitsEvent() public {
-        // Setup transaction
-        address target = address(mockContract);
-        uint256 value = 0;
-        bytes memory data = abi.encodeWithSignature("setValue(uint256)", 123);
-        bytes32 txHash = wallet.getTransactionHash(target, value, data, wallet.nonce());
-        
-        // Sign transaction
-        vm.prank(signer1);
-        wallet.signTransaction(txHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(txHash);
-        
-        // Prepare signers array
-        address[] memory executionSigners = new address[](2);
-        executionSigners[0] = signer1;
-        executionSigners[1] = signer2;
+        (address target, uint256 value, bytes memory data) = _setupStandardTransaction();
+        bytes32 txHash = _signTransaction(target, value, data);
+        address[] memory executionSigners = _getExecutionSigners();
         
         // Expect event
         vm.expectEmit(true, true, false, true);
@@ -352,54 +231,21 @@ contract MultisigWalletTest is Test {
         // Execute transaction
         wallet.executeTransaction(target, value, data, executionSigners);
     }
-    
+
     function testIncrementsNonceAfterExecution() public {
-        // Setup transaction
-        address target = address(mockContract);
-        uint256 value = 0;
-        bytes memory data = abi.encodeWithSignature("setValue(uint256)", 123);
+        (address target, uint256 value, bytes memory data) = _setupStandardTransaction();
         uint256 initialNonce = wallet.nonce();
-        bytes32 txHash = wallet.getTransactionHash(target, value, data, initialNonce);
         
-        // Sign transaction
-        vm.startPrank(signer1);
-        wallet.signTransaction(txHash);
-        vm.stopPrank();
-        
-        vm.startPrank(signer2);
-        wallet.signTransaction(txHash);
-        vm.stopPrank();
-        
-        // Prepare signers array
-        address[] memory executionSigners = new address[](2);
-        executionSigners[0] = signer1;
-        executionSigners[1] = signer2;
-        
-        // Execute transaction
-        wallet.executeTransaction(target, value, data, executionSigners);
+        _testSuccessfulTransaction(target, value, data);
         
         // Verify nonce increment
         assertEq(wallet.nonce(), initialNonce + 1);
     }
-    
+
     function testMarksTransactionAsExecuted() public {
-        // Setup and execute transaction
-        address target = address(mockContract);
-        uint256 value = 0;
-        bytes memory data = abi.encodeWithSignature("setValue(uint256)", 123);
-        bytes32 txHash = wallet.getTransactionHash(target, value, data, wallet.nonce());
-        
-        // Sign transaction
-        vm.prank(signer1);
-        wallet.signTransaction(txHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(txHash);
-        
-        // Prepare signers array
-        address[] memory executionSigners = new address[](2);
-        executionSigners[0] = signer1;
-        executionSigners[1] = signer2;
+        (address target, uint256 value, bytes memory data) = _setupStandardTransaction();
+        bytes32 txHash = _signTransaction(target, value, data);
+        address[] memory executionSigners = _getExecutionSigners();
         
         // Execute transaction
         wallet.executeTransaction(target, value, data, executionSigners);
@@ -407,12 +253,9 @@ contract MultisigWalletTest is Test {
         // Verify transaction marked as executed
         assertTrue(wallet.executed(txHash));
     }
-    
+
     function testCannotExecuteWithInsufficientSigners() public {
-        // Setup transaction
-        address target = address(mockContract);
-        uint256 value = 0;
-        bytes memory data = abi.encodeWithSignature("setValue(uint256)", 123);
+        (address target, uint256 value, bytes memory data) = _setupStandardTransaction();
         bytes32 txHash = wallet.getTransactionHash(target, value, data, wallet.nonce());
         
         // Sign transaction with only one signer
@@ -424,15 +267,17 @@ contract MultisigWalletTest is Test {
         executionSigners[0] = signer1;
         
         // Attempt execution
-        vm.expectRevert(abi.encodeWithSelector(MultisigWallet.InsufficientSigners.selector));
-        wallet.executeTransaction(target, value, data, executionSigners);
+        _attemptFailingExecution(
+            target, 
+            value, 
+            data, 
+            executionSigners, 
+            abi.encodeWithSelector(MultisigWallet.InsufficientSigners.selector)
+        );
     }
-    
+
     function testCannotExecuteWithInvalidSigners() public {
-        // Setup transaction
-        address target = address(mockContract);
-        uint256 value = 0;
-        bytes memory data = abi.encodeWithSignature("setValue(uint256)", 123);
+        (address target, uint256 value, bytes memory data) = _setupStandardTransaction();
         bytes32 txHash = wallet.getTransactionHash(target, value, data, wallet.nonce());
         
         // Sign transaction
@@ -445,85 +290,47 @@ contract MultisigWalletTest is Test {
         executionSigners[1] = nonSigner;
         
         // Attempt execution
-        vm.expectRevert(abi.encodeWithSelector(MultisigWallet.NotEnoughValidSignatures.selector));
-        wallet.executeTransaction(target, value, data, executionSigners);
+        _attemptFailingExecution(
+            target, 
+            value, 
+            data, 
+            executionSigners, 
+            abi.encodeWithSelector(MultisigWallet.NotEnoughValidSignatures.selector)
+        );
     }
-    
+
     function testCannotExecuteWithZeroTargetAddress() public {
-        // Setup transaction
-        address target = address(0);
-        uint256 value = 0;
-        bytes memory data = abi.encodeWithSignature("setValue(uint256)", 123);
-        
-        // Prepare signers array
-        address[] memory executionSigners = new address[](2);
-        executionSigners[0] = signer1;
-        executionSigners[1] = signer2;
+        (,uint256 value, bytes memory data) = _setupStandardTransaction();
+        address zeroTarget = address(0);
+        address[] memory executionSigners = _getExecutionSigners();
         
         // Attempt execution
-        vm.expectRevert(abi.encodeWithSelector(MultisigWallet.InvalidTargetAddress.selector));
-        wallet.executeTransaction(target, value, data, executionSigners);
+        _attemptFailingExecution(
+            zeroTarget, 
+            value, 
+            data, 
+            executionSigners, 
+            abi.encodeWithSelector(MultisigWallet.InvalidTargetAddress.selector)
+        );
     }
-    
+
     function testCannotExecuteSameTransactionTwice() public {
-        // Setup transaction
-        address target = address(mockContract);
-        uint256 value = 0;
-        bytes memory data = abi.encodeWithSignature("setValue(uint256)", 123);
-        bytes32 txHash = wallet.getTransactionHash(target, value, data, wallet.nonce());
-        
-        // Sign transaction
-        vm.prank(signer1);
-        wallet.signTransaction(txHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(txHash);
-        
-        // Prepare signers array
-        address[] memory executionSigners = new address[](2);
-        executionSigners[0] = signer1;
-        executionSigners[1] = signer2;
+        (address target, uint256 value, bytes memory data) = _setupStandardTransaction();
+        _signTransaction(target, value, data);
+        address[] memory executionSigners = _getExecutionSigners();
         
         // Execute transaction first time
         wallet.executeTransaction(target, value, data, executionSigners);
         
         // Attempt to execute same transaction again
-        vm.expectRevert(); // TransactionAlreadyExecuted
-        wallet.executeTransaction(target, value, data, executionSigners);
+        _attemptFailingExecution(target, value, data, executionSigners, "");
     }
     
     // ============ Signer Management Tests ============
     
     function testUpdateSigners() public {
-        // Setup new signers and threshold
-        address[] memory newSigners = new address[](3);
-        newSigners[0] = signer1;
-        newSigners[1] = signer2;
-        newSigners[2] = nonSigner; // Adding nonSigner, removing signer3
-        uint256 newThreshold = 2;
-        
-        // Get update hash
-        bytes32 updateHash = keccak256(abi.encodePacked(
-            "UPDATE_SIGNERS",
-            newSigners,
-            newThreshold,
-            wallet.nonce()
-        ));
-        
-        // Sign the update
-        vm.prank(signer1);
-        wallet.signTransaction(updateHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(updateHash);
-        
-        // Prepare signers array for update
-        address[] memory updateSigners = new address[](2);
-        updateSigners[0] = signer1;
-        updateSigners[1] = signer2;
-        
-        // Execute update
-        wallet.updateSigners(newSigners, newThreshold, updateSigners);
+        (address[] memory newSigners, uint256 newThreshold) = _createStandardNewSigners();
+        _executeUpdateSigners(newSigners, newThreshold);
         
         // Verify signer changes
         assertEq(wallet.getSignerCount(), newSigners.length);
@@ -532,33 +339,17 @@ contract MultisigWalletTest is Test {
         assertTrue(wallet.isAuthorizedSigner(nonSigner));
         assertFalse(wallet.isAuthorizedSigner(signer3));
     }
-    
+
     function testUpdateSignersEmitsEvents() public {
-        // Setup new signers and threshold
+        // Setup different set of signers to test more event emissions
         address[] memory newSigners = new address[](2);
         newSigners[0] = signer1;
         newSigners[1] = nonSigner; // Adding nonSigner, removing signer2 and signer3
         uint256 newThreshold = 1;
         
-        // Get update hash
-        bytes32 updateHash = keccak256(abi.encodePacked(
-            "UPDATE_SIGNERS",
-            newSigners,
-            newThreshold,
-            wallet.nonce()
-        ));
-        
-        // Sign the update
-        vm.prank(signer1);
-        wallet.signTransaction(updateHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(updateHash);
-        
-        // Prepare signers array for update
-        address[] memory updateSigners = new address[](2);
-        updateSigners[0] = signer1;
-        updateSigners[1] = signer2;
+        bytes32 updateHash = _getUpdateHash(newSigners, newThreshold);
+        _signUpdateBySigners(updateHash);
+        address[] memory updateSigners = _getExecutionSigners();
         
         // Expect events
         vm.expectEmit(true, false, false, true);
@@ -582,59 +373,20 @@ contract MultisigWalletTest is Test {
         // Execute update
         wallet.updateSigners(newSigners, newThreshold, updateSigners);
     }
-    
+
     function testUpdateSignersIncrementsNonce() public {
-        // Setup new signers and threshold
-        address[] memory newSigners = new address[](3);
-        newSigners[0] = signer1;
-        newSigners[1] = signer2;
-        newSigners[2] = nonSigner;
-        uint256 newThreshold = 2;
+        (address[] memory newSigners, uint256 newThreshold) = _createStandardNewSigners();
         
         uint256 initialNonce = wallet.nonce();
-        
-        // Get update hash
-        bytes32 updateHash = keccak256(abi.encodePacked(
-            "UPDATE_SIGNERS",
-            newSigners,
-            newThreshold,
-            initialNonce
-        ));
-        
-        // Sign the update
-        vm.prank(signer1);
-        wallet.signTransaction(updateHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(updateHash);
-        
-        // Prepare signers array for update
-        address[] memory updateSigners = new address[](2);
-        updateSigners[0] = signer1;
-        updateSigners[1] = signer2;
-        
-        // Execute update
-        wallet.updateSigners(newSigners, newThreshold, updateSigners);
+        _executeUpdateSigners(newSigners, newThreshold);
         
         // Verify nonce incremented
         assertEq(wallet.nonce(), initialNonce + 1);
     }
-    
+
     function testCannotUpdateWithInsufficientSigners() public {
-        // Setup new signers and threshold
-        address[] memory newSigners = new address[](3);
-        newSigners[0] = signer1;
-        newSigners[1] = signer2;
-        newSigners[2] = nonSigner;
-        uint256 newThreshold = 2;
-        
-        // Get update hash
-        bytes32 updateHash = keccak256(abi.encodePacked(
-            "UPDATE_SIGNERS",
-            newSigners,
-            newThreshold,
-            wallet.nonce()
-        ));
+        (address[] memory newSigners, uint256 newThreshold) = _createStandardNewSigners();
+        bytes32 updateHash = _getUpdateHash(newSigners, newThreshold);
         
         // Sign with only one signer
         vm.prank(signer1);
@@ -645,25 +397,17 @@ contract MultisigWalletTest is Test {
         updateSigners[0] = signer1;
         
         // Attempt update
-        vm.expectRevert(abi.encodeWithSelector(MultisigWallet.InsufficientSigners.selector));
-        wallet.updateSigners(newSigners, newThreshold, updateSigners);
+        _attemptFailingUpdate(
+            newSigners, 
+            newThreshold, 
+            updateSigners, 
+            abi.encodeWithSelector(MultisigWallet.InsufficientSigners.selector)
+        );
     }
-    
+
     function testCannotUpdateWithInvalidSigners() public {
-        // Setup new signers and threshold
-        address[] memory newSigners = new address[](3);
-        newSigners[0] = signer1;
-        newSigners[1] = signer2;
-        newSigners[2] = nonSigner;
-        uint256 newThreshold = 2;
-        
-        // Get update hash
-        bytes32 updateHash = keccak256(abi.encodePacked(
-            "UPDATE_SIGNERS",
-            newSigners,
-            newThreshold,
-            wallet.nonce()
-        ));
+        (address[] memory newSigners, uint256 newThreshold) = _createStandardNewSigners();
+        bytes32 updateHash = _getUpdateHash(newSigners, newThreshold);
         
         // Sign with only one valid signer
         vm.prank(signer1);
@@ -675,46 +419,42 @@ contract MultisigWalletTest is Test {
         updateSigners[1] = nonSigner;
         
         // Attempt update
-        vm.expectRevert(abi.encodeWithSelector(MultisigWallet.NotEnoughValidSignatures.selector));
-        wallet.updateSigners(newSigners, newThreshold, updateSigners);
+        _attemptFailingUpdate(
+            newSigners, 
+            newThreshold, 
+            updateSigners, 
+            abi.encodeWithSelector(MultisigWallet.NotEnoughValidSignatures.selector)
+        );
     }
-    
+
     function testCannotUpdateWithZeroThreshold() public {
-        // Setup new signers and threshold
-        address[] memory newSigners = new address[](3);
-        newSigners[0] = signer1;
-        newSigners[1] = signer2;
-        newSigners[2] = nonSigner;
-        uint256 newThreshold = 0; // Invalid threshold
-        
-        // Prepare signers array
-        address[] memory updateSigners = new address[](2);
-        updateSigners[0] = signer1;
-        updateSigners[1] = signer2;
+        (address[] memory newSigners,) = _createStandardNewSigners();
+        uint256 invalidThreshold = 0; // Invalid threshold
+        address[] memory updateSigners = _getExecutionSigners();
         
         // Attempt update
-        vm.expectRevert(abi.encodeWithSelector(MultisigWallet.InvalidThreshold.selector));
-        wallet.updateSigners(newSigners, newThreshold, updateSigners);
+        _attemptFailingUpdate(
+            newSigners, 
+            invalidThreshold, 
+            updateSigners, 
+            abi.encodeWithSelector(MultisigWallet.InvalidThreshold.selector)
+        );
     }
-    
+
     function testCannotUpdateWithThresholdTooHigh() public {
-        // Setup new signers and threshold
-        address[] memory newSigners = new address[](3);
-        newSigners[0] = signer1;
-        newSigners[1] = signer2;
-        newSigners[2] = nonSigner;
-        uint256 newThreshold = 4; // Higher than number of signers
-        
-        // Prepare signers array
-        address[] memory updateSigners = new address[](2);
-        updateSigners[0] = signer1;
-        updateSigners[1] = signer2;
+        (address[] memory newSigners,) = _createStandardNewSigners();
+        uint256 tooHighThreshold = 4; // Higher than number of signers
+        address[] memory updateSigners = _getExecutionSigners();
         
         // Attempt update
-        vm.expectRevert(abi.encodeWithSelector(MultisigWallet.InvalidThreshold.selector));
-        wallet.updateSigners(newSigners, newThreshold, updateSigners);
+        _attemptFailingUpdate(
+            newSigners, 
+            tooHighThreshold, 
+            updateSigners, 
+            abi.encodeWithSelector(MultisigWallet.InvalidThreshold.selector)
+        );
     }
-    
+
     function testCannotUpdateWithDuplicateSigners() public {
         // Setup new signers with duplicate
         address[] memory newSigners = new address[](3);
@@ -723,31 +463,19 @@ contract MultisigWalletTest is Test {
         newSigners[2] = signer1; // Duplicate
         uint256 newThreshold = 2;
 
-        // Get update hash
-        bytes32 updateHash = keccak256(abi.encodePacked(
-            "UPDATE_SIGNERS",
-            newSigners,
-            newThreshold,
-            wallet.nonce()
-        ));
-        
-        // Sign the update
-        vm.prank(signer1);
-        wallet.signTransaction(updateHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(updateHash);
-        
-        // Prepare signers array
-        address[] memory updateSigners = new address[](2);
-        updateSigners[0] = signer1;
-        updateSigners[1] = signer2;
+        bytes32 updateHash = _getUpdateHash(newSigners, newThreshold);
+        _signUpdateBySigners(updateHash);
+        address[] memory updateSigners = _getExecutionSigners();
         
         // Attempt update
-        vm.expectRevert(abi.encodeWithSelector(MultisigWallet.DuplicateSigner.selector));
-        wallet.updateSigners(newSigners, newThreshold, updateSigners);
+        _attemptFailingUpdate(
+            newSigners, 
+            newThreshold, 
+            updateSigners, 
+            abi.encodeWithSelector(MultisigWallet.DuplicateSigner.selector)
+        );
     }
-    
+
     function testCannotUpdateWithZeroAddressSigner() public {
         // Setup new signers with zero address
         address[] memory newSigners = new address[](3);
@@ -756,35 +484,32 @@ contract MultisigWalletTest is Test {
         newSigners[2] = address(0); // Zero address
         uint256 newThreshold = 2;
 
-          // Get update hash
-        bytes32 updateHash = keccak256(abi.encodePacked(
-            "UPDATE_SIGNERS",
-            newSigners,
-            newThreshold,
-            wallet.nonce()
-        ));
-        
-        // Sign the update
-        vm.prank(signer1);
-        wallet.signTransaction(updateHash);
-        
-        vm.prank(signer2);
-        wallet.signTransaction(updateHash);
-        
-        // Prepare signers array
-        address[] memory updateSigners = new address[](2);
-        updateSigners[0] = signer1;
-        updateSigners[1] = signer2;
+        bytes32 updateHash = _getUpdateHash(newSigners, newThreshold);
+        _signUpdateBySigners(updateHash);
+        address[] memory updateSigners = _getExecutionSigners();
         
         // Attempt update
-        vm.expectRevert(abi.encodeWithSelector(MultisigWallet.InvalidSignerAddress.selector));
-        wallet.updateSigners(newSigners, newThreshold, updateSigners);
+        _attemptFailingUpdate(
+            newSigners, 
+            newThreshold, 
+            updateSigners, 
+            abi.encodeWithSelector(MultisigWallet.InvalidSignerAddress.selector)
+        );
     }
     
     // ============ Helper Functions ============
     
+    function _createTestSigners() internal view returns (address[] memory) {
+        address[] memory testSigners = new address[](3);
+        testSigners[0] = signer1;
+        testSigners[1] = signer2;
+        testSigners[2] = signer3;
+
+        return testSigners;
+    }
+
     function _createTestTxHash() internal view returns (bytes32) {
-        address target = address(mockContract);
+        address target = mockAddress;
         uint256 value = 0;
         bytes memory data = abi.encodeWithSignature("setValue(uint256)", 123);
         uint256 nonce = wallet.nonce();
@@ -792,13 +517,105 @@ contract MultisigWalletTest is Test {
         return wallet.getTransactionHash(target, value, data, nonce);
     }
     
-    // Required to receive ETH in tests
-    receive() external payable {}
+    function _getExecutionSigners() internal view returns (address[] memory) {
+        address[] memory executionSigners = new address[](2);
+        executionSigners[0] = signer1;
+        executionSigners[1] = signer2;
+
+        return executionSigners;
+    }
     
-    // Event definitions for testing emitted events
-    event TransactionSigned(bytes32 indexed txHash, address indexed signer);
-    event TransactionExecuted(bytes32 indexed txHash, address indexed target, uint256 value, bytes data);
-    event SignerAdded(address indexed signer);
-    event SignerRemoved(address indexed signer);
-    event ThresholdChanged(uint256 newThreshold);
+    function _signTransaction(address target, uint256 value, bytes memory data) internal returns (bytes32) {
+        bytes32 txHash = wallet.getTransactionHash(target, value, data, wallet.nonce());
+        
+        vm.prank(signer1);
+        wallet.signTransaction(txHash);
+        
+        vm.prank(signer2);
+        wallet.signTransaction(txHash);
+        
+        return txHash;
+    }
+
+    function _setupStandardTransaction() internal view returns (address target, uint256 value, bytes memory data) {
+        target = mockAddress;
+        value = 0;
+        data = abi.encodeWithSignature("setValue(uint256)", 123);
+        return (target, value, data);
+    }
+
+    function _attemptFailingExecution(
+        address target, 
+        uint256 value, 
+        bytes memory data, 
+        address[] memory executionSigners,
+        bytes memory revertData
+    ) internal {
+        if (revertData.length > 0) {
+            vm.expectRevert(revertData);
+        } else {
+            vm.expectRevert();
+        }
+        wallet.executeTransaction(target, value, data, executionSigners);
+    }
+    
+    function _testSuccessfulTransaction(address target, uint256 value, bytes memory data) internal {
+       _signTransaction(target, value, data);
+        address[] memory executionSigners = _getExecutionSigners();
+        
+        // Check initial balances
+        uint256 initialWalletBalance = address(wallet).balance;
+        uint256 initialTargetBalance = address(target).balance;
+        
+        // Execute the transaction
+        wallet.executeTransaction(target, value, data, executionSigners);
+        
+        // Verify balances after transfer
+        assertEq(address(wallet).balance, initialWalletBalance - value, "Wallet balance not decreased correctly");
+        assertEq(address(target).balance, initialTargetBalance + value, "Target balance not increased correctly");
+    }
+
+    function _createStandardNewSigners() internal view returns (address[] memory newSigners, uint256 newThreshold) {
+        newSigners = new address[](3);
+        newSigners[0] = signer1;
+        newSigners[1] = signer2;
+        newSigners[2] = nonSigner; // Adding nonSigner, removing signer3
+        newThreshold = 2;
+        return (newSigners, newThreshold);
+    }
+
+    function _attemptFailingUpdate(
+        address[] memory newSigners, 
+        uint256 newThreshold, 
+        address[] memory updateSigners,
+        bytes memory revertData
+    ) internal {
+        vm.expectRevert(revertData);
+        wallet.updateSigners(newSigners, newThreshold, updateSigners);
+    }
+    
+    function _getUpdateHash(address[] memory newSigners, uint256 newThreshold) internal view returns (bytes32) {
+        return keccak256(abi.encodePacked(
+            "UPDATE_SIGNERS",
+            newSigners,
+            newThreshold,
+            wallet.nonce()
+        ));
+    }
+    
+    function _signUpdateBySigners(bytes32 updateHash) internal {
+        vm.prank(signer1);
+        wallet.signTransaction(updateHash);
+        
+        vm.prank(signer2);
+        wallet.signTransaction(updateHash);
+    }
+    
+    function _executeUpdateSigners(address[] memory newSigners, uint256 newThreshold) internal {
+        bytes32 updateHash = _getUpdateHash(newSigners, newThreshold);
+        _signUpdateBySigners(updateHash);
+        address[] memory updateSigners = _getExecutionSigners();
+        
+        wallet.updateSigners(newSigners, newThreshold, updateSigners);
+    }
 }
