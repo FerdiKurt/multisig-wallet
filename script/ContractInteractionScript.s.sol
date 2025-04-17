@@ -50,9 +50,9 @@ contract ContractInteractionScript is Script {
     function deployContracts(address signer1, address signer2, address signer3) internal {
         vm.startBroadcast(ANVIL_DEPLOYER_KEY);
         
-        // Deploy TestReceiver
+        // Deploy Mock
         mock = new Mock();
-        console.log("TestReceiver deployed to:", address(mock));
+        console.log("Mock deployed to:", address(mock));
         
         // Deploy MultisigWallet
         address[] memory signers = new address[](3);
@@ -145,16 +145,16 @@ contract ContractInteractionScript is Script {
         uint256 initialWalletBalance = address(wallet).balance;
         uint256 initialReceiverBalance = address(mock).balance;
         console.log("Initial wallet balance:", initialWalletBalance / 1e18, "ETH");
-        console.log("Initial receiver balance:", initialReceiverBalance / 1e18, "ETH");
+        console.log("Initial mock balance:", initialReceiverBalance / 1e18, "ETH");
     }
     
     function logFinalState() internal view {
         uint256 finalWalletBalance = address(wallet).balance;
         uint256 finalReceiverBalance = address(mock).balance;
         console.log("Final wallet balance:", finalWalletBalance / 1e18, "ETH");
-        console.log("Final receiver balance:", finalReceiverBalance / 1e18, "ETH");
+        console.log("Final mock balance:", finalReceiverBalance / 1e18, "ETH");
         
-        // Check TestReceiver state
+        // Check Mock state
         uint256 lastValueReceived = mock.lastValueReceived();
         address lastSender = mock.lastSender();
         console.log("Last value received:", lastValueReceived / 1e18, "ETH");
