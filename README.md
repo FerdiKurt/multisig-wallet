@@ -7,7 +7,7 @@ A Solidity implementation of a k-of-n multisignature wallet that allows executio
 - **K-of-N Signature Scheme**: Configurable threshold of required signatures
 - **Arbitrary Execution**: Call any function on any contract with any parameters
 - **Signer Management**: Add or remove signers with existing signers' approval
-- **ETH Handling**: Send and receive ETH securely
+- **ETH Handling**: Send and receive ETH
 - **Replay Protection**: Nonce-based transaction uniqueness
 
 ## Usage
